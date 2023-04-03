@@ -317,3 +317,64 @@ RR 级别下只会在第一次 SELECT 记录的时候生成一个 READVIEW:
 2. 然后到第二条记录，其 `trx_id` = 100, 小于 `min_trx_id`, 可见，因此返回，得到记录（Fbalance=99）.
 
 可见，尽管事务 400 已经提交了，但对于当前事务（id=300）来说，读取的始终是同样的记录值，其他事务的提交并不影响。
+
+
+### 一个简单的例子
+https://bugs.mysql.com/bug.php?id=63870
+
+mysql -h 9.135.155.144 -u zft_dev_all -p
+
+查看事务 id:
+```
+SELECT TRX_ID FROM INFORMATION_SCHEMA.INNODB_TRX WHERE TRX_MYSQL_THREAD_ID = CONNECTION_ID();
+```
+
+查看事务隔离级别：
+```
+select @@tx_isolation;
+```
+
+client A:
+```
+>> begin;
+>> select * from fx_business_order_db.t_test_balance where id=1;
+
+<< MySQL [(none)]> select balance from fx_business_order_db.t_test_balance where id=1;
++---------+
+| balance |
++---------+
+|    1000 |
++---------+
+1 row in set (0.01 sec)
+
+>> update fx_business_order_db.t_test_balance set balance = balance+1 where id = 1;
+```
+
+client B:
+```
+>> begin;
+>> select * from fx_business_order_db.t_test_balance where id=1;
+<< MySQL [(none)]> select balance from fx_business_order_db.t_test_balance where id=1;
++---------+
+| balance |
++---------+
+|    1000 |
++---------+
+1 row in set (0.01 sec)
+
+>> update fx_business_order_db.t_test_balance set balance = 9999 where id = 1;
+>> commit;
+
+```
+
+|  执行顺序 | 事务 A | 事务 B | 
+|  ----  | ----  | ---- |
+| 1 | begin; | |
+| 2 |  |  begin; |
+| 3 | select * from fx_business_order_db.t_test_balance where id=1; | | 
+| 4 |  | select * from fx_business_order_db.t_test_balance where id=1;| 
+| 5 |  | update fx_business_order_db.t_test_balance set balance = 9999 where id = 1; | 
+| 6 |  | commit; | 
+| 7 | select * from fx_business_order_db.t_test_balance where id=1;| | 
+| 8 | update fx_business_order_db.t_test_balance set balance = balance+1 where id = 1; (结果是 1000? 还是 101 ?)  | | 
+| 9 | select * from fx_business_order_db.t_test_balance where id=1; | | | 
